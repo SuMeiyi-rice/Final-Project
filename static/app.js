@@ -66,6 +66,12 @@ function bindEvents() {
             document.querySelectorAll('.category-item').forEach(i => i.classList.remove('active'));
             item.classList.add('active');
             currentCategory = item.dataset.category;
+            
+            // 追踪用户点击分类
+            if (token && currentCategory !== 'all') {
+                trackCategoryClick(currentCategory);
+            }
+            
             renderStories();
         });
     });
@@ -89,6 +95,7 @@ function bindEvents() {
     if (userCenterModal) {
         userCenterModal.addEventListener('click', (e) => {
             if (e.target === userCenterModal) {
+                stopRetroCamera();
                 userCenterModal.style.display = 'none';
             }
         });
@@ -197,6 +204,10 @@ function renderStoriesFromList(stories) {
 }
 
 // 显示用户中心
+// Retro Camera 控制
+let retroCameraStream = null;
+let retroCameraAnimationId = null;
+
 function showUserCenter() {
     // 渲染并显示个人中心模态框
     const modal = document.getElementById('user-center-modal');
@@ -229,7 +240,8 @@ function showUserCenter() {
         
         // 获取用户最感兴趣的分类
         if (categoriesEl && token) {
-            categoriesEl.innerHTML = '<span class="category-tag">LOADING...</span>';
+            categoriesEl.innerHTML = '<span class="retro-interest-tag retro-loading-tag">LOADING...</span>';
+            
             fetch(API_BASE + '/user-top-categories', {
                 headers: { 'Authorization': 'Bearer ' + token }
             })
@@ -237,14 +249,19 @@ function showUserCenter() {
             .then(data => {
                 if (data.categories && data.categories.length > 0) {
                     categoriesEl.innerHTML = data.categories.map(cat => 
-                        '<span class="category-tag">' + (categoryNames[cat.category] || cat.category.toUpperCase()) + '</span>'
+                        '<span class="retro-interest-tag">' + (categoryNames[cat.category] || cat.category.toUpperCase()) + '</span>'
                     ).join('');
+                    
+                    // 更新用户档案类型
+                    updateProfileType(data.categories);
                 } else {
-                    categoriesEl.innerHTML = '<span class="category-tag" style="opacity:0.5;">NO DATA</span>';
+                    categoriesEl.innerHTML = '<span class="retro-interest-tag retro-no-data-tag">NO DATA</span>';
+                    updateProfileType([]);
                 }
             })
             .catch(() => {
-                categoriesEl.innerHTML = '<span class="category-tag" style="opacity:0.5;">ERROR</span>';
+                categoriesEl.innerHTML = '<span class="retro-interest-tag retro-no-data-tag">ERROR</span>';
+                updateProfileType([]);
             });
         }
     } else {
@@ -254,6 +271,12 @@ function showUserCenter() {
         if (incept) incept.textContent = '--/--/----';
         if (functionEl) functionEl.textContent = 'VISITOR';
         if (rankEl) rankEl.textContent = 'UNKNOWN';
+        
+        // 访客状态
+        if (categoriesEl) {
+            categoriesEl.innerHTML = '<span class="retro-interest-tag retro-no-data-tag">GUEST MODE</span>';
+        }
+        updateProfileType([]);
     }
 
     // 简单请求关注列表（如果需要，可扩展 API）
@@ -282,7 +305,149 @@ function showUserCenter() {
         }
     }
 
-    if (modal) modal.style.display = 'flex';
+    if (modal) {
+        modal.style.display = 'flex';
+        // 初始化摄像头按钮
+        initRetroCameraButton();
+    }
+}
+
+// 初始化 Retro 摄像头按钮
+function initRetroCameraButton() {
+    const btn = document.getElementById('retro-camera-btn');
+    if (btn) {
+        // 移除旧的事件监听器
+        const newBtn = btn.cloneNode(true);
+        btn.parentNode.replaceChild(newBtn, btn);
+        
+        newBtn.addEventListener('click', () => {
+            if (retroCameraStream) {
+                stopRetroCamera();
+            } else {
+                startRetroCamera();
+            }
+        });
+    }
+}
+
+// 启动 Retro 摄像头
+async function startRetroCamera() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { width: 320, height: 320 } 
+        });
+        
+        retroCameraStream = stream;
+        const video = document.getElementById('retro-video');
+        const canvas = document.getElementById('retro-canvas');
+        const placeholder = document.getElementById('retro-camera-placeholder');
+        const btn = document.getElementById('retro-camera-btn');
+        
+        if (video) {
+            video.srcObject = stream;
+            video.style.display = 'block';
+        }
+        
+        if (placeholder) {
+            placeholder.style.display = 'none';
+        }
+        
+        if (canvas) {
+            canvas.style.display = 'block';
+        }
+        
+        if (btn) {
+            btn.textContent = 'TERMINATE';
+            btn.style.background = '#ff6b6b';
+        }
+        
+        // 开始渲染循环
+        renderRetroCamera();
+        
+    } catch (err) {
+        console.error("Error accessing camera:", err);
+        alert("无法访问摄像头，请检查权限设置。");
+    }
+}
+
+// 停止 Retro 摄像头
+function stopRetroCamera() {
+    if (retroCameraStream) {
+        retroCameraStream.getTracks().forEach(track => track.stop());
+        retroCameraStream = null;
+    }
+    
+    if (retroCameraAnimationId) {
+        cancelAnimationFrame(retroCameraAnimationId);
+        retroCameraAnimationId = null;
+    }
+    
+    const video = document.getElementById('retro-video');
+    const canvas = document.getElementById('retro-canvas');
+    const placeholder = document.getElementById('retro-camera-placeholder');
+    const btn = document.getElementById('retro-camera-btn');
+    
+    if (video) {
+        video.srcObject = null;
+        video.style.display = 'none';
+    }
+    
+    if (canvas) {
+        canvas.style.display = 'none';
+    }
+    
+    if (placeholder) {
+        placeholder.style.display = 'flex';
+    }
+    
+    if (btn) {
+        btn.textContent = 'INITIALIZE';
+        btn.style.background = '#dfff00';
+    }
+}
+
+// 渲染 Retro 摄像头画面
+function renderRetroCamera() {
+    const video = document.getElementById('retro-video');
+    const canvas = document.getElementById('retro-canvas');
+    
+    if (retroCameraStream && video && canvas && video.readyState === video.HAVE_ENOUGH_DATA) {
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    }
+    
+    retroCameraAnimationId = requestAnimationFrame(renderRetroCamera);
+}
+
+// 更新用户档案类型（根据兴趣分类）
+function updateProfileType(categories) {
+    const profileTypeEl = document.getElementById('uc-profile-type');
+    if (!profileTypeEl) return;
+    
+    if (!categories || categories.length === 0) {
+        profileTypeEl.textContent = 'UNKNOWN';
+        return;
+    }
+    
+    // 根据最感兴趣的分类定义用户类型
+    const profileTypes = {
+        'subway_ghost': 'URBAN EXPLORER',
+        'abandoned_building': 'RUIN HUNTER',
+        'cursed_object': 'ARTIFACT SEEKER',
+        'missing_person': 'INVESTIGATOR',
+        'time_anomaly': 'REALITY BENDER',
+        'campus_horror': 'STUDENT WITNESS',
+        'rental_mystery': 'TENANT SURVIVOR',
+        'night_taxi': 'NIGHT WANDERER',
+        'hospital_ward': 'MEDICAL ANOMALY',
+        'elevator_incident': 'VERTICAL TRAVELER',
+        'mirror_realm': 'REFLECTION WALKER'
+    };
+    
+    const topCategory = categories[0].category;
+    const profileType = profileTypes[topCategory] || 'UNKNOWN ENTITY';
+    
+    profileTypeEl.textContent = profileType;
 }
 
 // 追踪用户点击的分类
